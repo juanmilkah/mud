@@ -15,4 +15,6 @@ Data{
   id: u32,
   price: f32,
   quantity: u32,
-}`
+}```
+
+The project is licensed under the [MIT](LICENSE) License.
