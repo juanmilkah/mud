@@ -14,6 +14,12 @@ struct Cli {
     /// Sub-command to process the data
     #[command(subcommand)]
     command: Command,
+    /// Output the first (count) lines
+    #[arg(short, long)]
+    count: Option<usize>,
+    /// Output the result in reverse order
+    #[arg(short, long, action)]
+    reverse: bool,
 }
 
 #[derive(Subcommand)]
@@ -50,25 +56,6 @@ enum Operator {
     Eq,
     /// Not Equal to
     Neq,
-}
-
-// Support using symbols rather than words for operators
-// ">" instead of "gt"
-// "<" instead of "lt"
-impl std::str::FromStr for Operator {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            ">" | "gt" => Ok(Self::Gt),
-            "<" | "lt" => Ok(Self::Lt),
-            "!=" | "neq" => Ok(Self::Neq),
-            "=" | "eq" => Ok(Self::Eq),
-            "<=" | "lte" => Ok(Self::Lte),
-            ">=" | "gte" => Ok(Self::Gte),
-            _ => Err(format!("Unknown operator: {}", s)),
-        }
-    }
 }
 
 fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
@@ -183,7 +170,14 @@ fn main() -> Result<(), String> {
 
             let cat_index =
                 index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
-            cleaned_data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
+            if args.reverse {
+                cleaned_data.sort_by(|a, b| b[cat_index].total_cmp(&a[cat_index]));
+            } else {
+                cleaned_data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
+            }
+            if let Some(count) = args.count {
+                cleaned_data.truncate(count);
+            }
             tabulate_data(&cleaned_data, &headers);
             std::process::exit(0);
         }
@@ -199,17 +193,23 @@ fn main() -> Result<(), String> {
 
             let cat_index =
                 index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
-            let processed_data = cleaned_data
+            let mut processed_data = cleaned_data
                 .into_iter()
                 .filter(|row| match instruction {
                     Operator::Gt => row[cat_index] > argument,
                     Operator::Lt => row[cat_index] < argument,
-                    Operator::Eq => row[cat_index] == argument,
-                    Operator::Neq => row[cat_index] != argument,
+                    Operator::Eq => (row[cat_index] - argument).abs() < f32::EPSILON,
+                    Operator::Neq => (row[cat_index] - argument).abs() > f32::EPSILON,
                     Operator::Gte => row[cat_index] >= argument,
                     Operator::Lte => row[cat_index] <= argument,
                 })
                 .collect::<Vec<Vec<f32>>>();
+            if let Some(count) = args.count {
+                processed_data.truncate(count);
+            }
+            if args.reverse {
+                processed_data.reverse();
+            }
             tabulate_data(&processed_data, &headers);
         }
     }
