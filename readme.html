@@ -1,0 +1,18 @@
+<h1>Mud</h1>
+<p>Visualize data from a file with comma separated values.</p>
+<pre><code class="language-bash">id,price,quantity
+1,20,7
+2,15,3
+3,16.50,4
+</code></pre>
+<pre><code class="language-bash">mud --sort &quot;price&quot;;
+
+*------------------------------*
+* id    * price    * amount    *
+*-------*----------*-----------*
+* 1     * 15.00    * 3         *
+* 2     * 16.50    * 4         *
+* 3     * 20       * 7         *
+
+</code></pre>
+<p>The project is licensed under the <a href="LICENSE">MIT</a> License.</p>

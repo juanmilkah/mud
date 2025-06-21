@@ -1,6 +1,7 @@
-# Csv Visualizer
+# Mud
 
 Visualize data from a file with comma separated values.
+
 ```bash
 id,price,quantity
 1,20,7
@@ -8,13 +9,17 @@ id,price,quantity
 3,16.50,4
 ```
 
-This gets translated to:
-
 ```bash
-Data{
-  id: u32,
-  price: f32,
-  quantity: u32,
-}```
+mud --sort "price";
+
+*------------------------------*
+* id    * price    * amount    *
+*-------*----------*-----------*
+* 1     * 15.00    * 3         *
+* 2     * 16.50    * 4         *
+* 3     * 20       * 7         *
+*------------------------------*
+
+```
 
 The project is licensed under the [MIT](LICENSE) License.
