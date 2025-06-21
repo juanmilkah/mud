@@ -5,14 +5,23 @@
 2,15,3
 3,16.50,4
 </code></pre>
-<pre><code class="language-bash">mud --sort &quot;price&quot;;
+<pre><code class="language-bash">mud data.csv sort price;
 
 *------------------------------*
 * id    * price    * amount    *
 *-------*----------*-----------*
-* 1     * 15.00    * 3         *
-* 2     * 16.50    * 4         *
-* 3     * 20       * 7         *
+* 2    * 15.00    * 3          *
+* 3    * 16.50    * 4          *
+* 1    * 20       * 7          *
+*------------------------------*
 
+mud data.csv filter price gt 15.0;
+
+*------------------------------*
+* id    * price    * amount    *
+*-------*----------*-----------*
+* 1    * 20       * 7          *
+* 3    * 16.50    * 4          *
+*------------------------------*
 </code></pre>
 <p>The project is licensed under the <a href="LICENSE">MIT</a> License.</p>

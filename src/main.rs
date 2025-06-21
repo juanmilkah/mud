@@ -1,10 +1,77 @@
 use std::{
-    env,
     fs::File,
     io::{BufReader, Read},
+    path::PathBuf,
 };
 
-fn visualize_data(data: &[Vec<f32>], headers: &[String]) {
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Filepath to csv file
+    filepath: PathBuf,
+    /// Sub-command to process the data
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Sort data by category
+    Sort {
+        #[arg(value_name = "CATEGORY")]
+        category: String,
+    },
+    /// Filter data by a criterion
+    Filter {
+        #[arg(value_name = "CATEGORY")]
+        category: String,
+
+        #[arg(value_name = "OPERATOR")]
+        operator: Operator,
+
+        #[arg(value_name = "VALUE")]
+        argument: f32,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+enum Operator {
+    /// Greater than
+    Gt,
+    /// Greater than or Equal
+    Gte,
+    /// Less than
+    Lt,
+    /// Less than or Equal
+    Lte,
+    /// Equal to
+    Eq,
+    /// Not Equal to
+    Neq,
+}
+
+// Support using symbols rather than words for operators
+// ">" instead of "gt"
+// "<" instead of "lt"
+impl std::str::FromStr for Operator {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            ">" | "gt" => Ok(Self::Gt),
+            "<" | "lt" => Ok(Self::Lt),
+            "!=" | "neq" => Ok(Self::Neq),
+            "=" | "eq" => Ok(Self::Eq),
+            "<=" | "lte" => Ok(Self::Lte),
+            ">=" | "gte" => Ok(Self::Gte),
+            _ => Err(format!("Unknown operator: {}", s)),
+        }
+    }
+}
+
+fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
     // tabulate the data
     // *------------------------------*
     // * id    * price    * amount    *
@@ -74,13 +141,10 @@ where
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let mut args = args.iter();
-    args.next().unwrap();
+    let args = Cli::parse();
 
-    let filepath = args.next().expect("Missing filepath");
     let mut content = String::new();
-    let mut file = BufReader::new(File::open(filepath).expect("File is missing"));
+    let mut file = BufReader::new(File::open(args.filepath).expect("File is missing"));
     file.read_to_string(&mut content).expect("read from file");
 
     let headers = content
@@ -94,34 +158,57 @@ fn main() {
     let mut cleaned_data = content
         .lines()
         .skip(1)
-        .map(|line| {
-            line.split(",")
-                .map(|elem| elem.trim())
-                .map(|elem| {
-                    elem.parse::<f32>()
-                        .unwrap_or_else(|_| elem.parse::<u32>().expect("Malformed data") as f32)
-                })
-                .collect::<Vec<f32>>()
+        .filter_map(|line| {
+            let matches = !line.is_empty();
+            matches.then(|| {
+                line.split(",")
+                    .map(|elem| elem.trim())
+                    .map(|elem| {
+                        elem.parse::<f32>()
+                            .unwrap_or_else(|_| elem.parse::<u32>().expect("Malformed data") as f32)
+                    })
+                    .collect::<Vec<f32>>()
+            })
         })
         .collect::<Vec<Vec<f32>>>();
 
-    let command = args.next().expect("Missing command");
-    match command.as_str() {
-        "--sort" => {
-            let category = args.next().expect("missing sort category");
-            if !headers.contains(category) {
+    match args.command {
+        Command::Sort { category } => {
+            if !headers.contains(&category) {
                 eprintln!("Invalid category");
                 std::process::exit(1);
             }
 
-            let cat_index = index_of(&headers, category).expect("Category not found");
+            let cat_index = index_of(&headers, &category).expect("Category not found");
             cleaned_data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
-            visualize_data(&cleaned_data, &headers);
+            tabulate_data(&cleaned_data, &headers);
             std::process::exit(0);
         }
-        _ => {
-            eprintln!("Invalid command");
-            std::process::exit(1);
+        Command::Filter {
+            category,
+            operator: instruction,
+            argument,
+        } => {
+            if !headers.contains(&category) {
+                eprintln!("Invalid category");
+                std::process::exit(1);
+            }
+
+            let cat_index = index_of(&headers, &category).expect("Missing category");
+            let processed_data = cleaned_data
+                .into_iter()
+                .filter(|row| match instruction {
+                    Operator::Gt => row[cat_index] > argument,
+                    Operator::Lt => row[cat_index] < argument,
+                    Operator::Eq => row[cat_index] == argument,
+                    Operator::Neq => row[cat_index] != argument,
+                    Operator::Gte => row[cat_index] >= argument,
+                    Operator::Lte => row[cat_index] <= argument,
+                })
+                .collect::<Vec<Vec<f32>>>();
+            tabulate_data(&processed_data, &headers);
         }
     }
+
+    std::process::exit(0);
 }
