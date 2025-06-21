@@ -1,6 +1,7 @@
 # Mud
 
 Visualize data from a file with comma separated values.
+Missing or invalid values are replaced with zero (0.0).
 
 ```bash
 id,price,quantity

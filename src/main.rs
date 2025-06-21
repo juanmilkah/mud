@@ -90,17 +90,17 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
         .map(|row| row.iter().map(|elem| format!("{:.2}", elem)).collect())
         .collect();
 
-    let mut col_widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    let mut cols_widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
     for row in &rows_as_string {
         for (i, elem) in row.iter().enumerate() {
-            col_widths[i] = col_widths[i].max(elem.len());
+            cols_widths[i] = cols_widths[i].max(elem.len());
         }
     }
 
     // headers separator
-    let separator = col_widths
+    let separator = cols_widths
         .iter()
-        .map(|&w| "-".repeat(w + 2))
+        .map(|&w| "=".repeat(w + 2))
         .collect::<Vec<_>>()
         .join("*");
     println!("{separator}");
@@ -108,21 +108,21 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
     let headers_row = headers
         .iter()
         .enumerate()
-        .map(|(i, h)| format!(" {:^width$} ", h, width = col_widths[i]))
+        .map(|(i, h)| format!(" {:>width$} ", h, width = cols_widths[i]))
         .collect::<Vec<_>>()
         .join("*");
 
-    println!("*{headers_row}*");
+    println!("{headers_row}");
     println!("{separator}");
 
     for row in rows_as_string {
         let row = row
             .iter()
             .enumerate()
-            .map(|(i, elem)| format!(" {:^width$} ", elem, width = col_widths[i]))
+            .map(|(i, elem)| format!(" {:>width$} ", elem, width = cols_widths[i]))
             .collect::<Vec<_>>()
             .join("*");
-        println!("*{row}*");
+        println!("{row}");
     }
 
     println!("{separator}");
@@ -140,19 +140,21 @@ where
     None
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     let args = Cli::parse();
 
     let mut content = String::new();
-    let mut file = BufReader::new(File::open(args.filepath).expect("File is missing"));
-    file.read_to_string(&mut content).expect("read from file");
+    let file = File::open(args.filepath).map_err(|err| format!("File is missing: {}", err))?;
+    let mut file = BufReader::new(file);
+    file.read_to_string(&mut content)
+        .map_err(|err| format!("failed to read from file: {}", err))?;
 
     let headers = content
         .lines()
         .next()
-        .expect("Missing headers")
+        .ok_or_else(|| "Missing headers".to_string())?
         .split(",")
-        .map(|s| s.to_lowercase())
+        .map(|s| s.trim().to_lowercase())
         .collect::<Vec<String>>();
 
     let mut cleaned_data = content
@@ -165,7 +167,7 @@ fn main() {
                     .map(|elem| elem.trim())
                     .map(|elem| {
                         elem.parse::<f32>()
-                            .unwrap_or_else(|_| elem.parse::<u32>().expect("Malformed data") as f32)
+                            .unwrap_or_else(|_| elem.parse::<u32>().unwrap_or_default() as f32)
                     })
                     .collect::<Vec<f32>>()
             })
@@ -179,7 +181,8 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let cat_index = index_of(&headers, &category).expect("Category not found");
+            let cat_index =
+                index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
             cleaned_data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
             tabulate_data(&cleaned_data, &headers);
             std::process::exit(0);
@@ -194,7 +197,8 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let cat_index = index_of(&headers, &category).expect("Missing category");
+            let cat_index =
+                index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
             let processed_data = cleaned_data
                 .into_iter()
                 .filter(|row| match instruction {
