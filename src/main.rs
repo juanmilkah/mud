@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, BufReader, BufWriter, Read, Write},
+    io::{self, BufReader, BufWriter, Write, stdin},
     path::PathBuf,
 };
 
@@ -10,7 +10,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(version, about, long_about = None)]
 struct Cli {
     /// Filepath to csv file
-    filepath: PathBuf,
+    /// If missing, read from stdin
+    filepath: Option<PathBuf>,
     /// Sub-command to process the data
     #[command(subcommand)]
     command: Command,
@@ -100,12 +101,11 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
     // * 2     * 25       * 10        *
     //
 
-    let header_cols = headers.len();
-    let data_cols = data[0].len();
-    if !data.is_empty() && header_cols != data_cols {
+    if !data.is_empty() && headers.len() != data[0].len() {
         eprintln!(
             "Header columns count does not match the data columns count: {} -> {}",
-            header_cols, data_cols
+            headers.len(),
+            data[0].len()
         );
         std::process::exit(1);
     }
@@ -139,6 +139,12 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
 
     println!("{headers_row}");
     println!("{separator}");
+
+    if rows_as_string.is_empty() {
+        println!("EMPTY!");
+        println!("{separator}");
+        return;
+    }
 
     for row in rows_as_string {
         let row = row
@@ -192,11 +198,17 @@ fn dump_to_file(headers: &[String], data: &[Vec<f32>], filepath: PathBuf) -> io:
 fn main() -> Result<(), String> {
     let args = Cli::parse();
 
-    let mut content = String::new();
-    let file = File::open(args.filepath).map_err(|err| format!("File is missing: {}", err))?;
-    let mut file = BufReader::new(file);
-    file.read_to_string(&mut content)
-        .map_err(|err| format!("failed to read from file: {}", err))?;
+    let content = match args.filepath {
+        Some(filepath) => {
+            let file = File::open(filepath).map_err(|err| format!("File is missing: {}", err))?;
+            let file = BufReader::new(file);
+            io::read_to_string(file).map_err(|err| format!("Read from file failed: {}", err))?
+        }
+        None => {
+            let stdin = stdin();
+            io::read_to_string(stdin).map_err(|err| format!("Read from stdin failed: {}", err))?
+        }
+    };
 
     let headers = content
         .lines()
