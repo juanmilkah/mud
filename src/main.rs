@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Filepath to csv file
+    /// Filepath to csv file.
     /// If missing, read from stdin
     filepath: Option<PathBuf>,
     /// Sub-command to process the data
