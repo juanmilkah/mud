@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufReader, Read},
+    io::{self, BufReader, BufWriter, Read, Write},
     path::PathBuf,
 };
 
@@ -14,31 +14,52 @@ struct Cli {
     /// Sub-command to process the data
     #[command(subcommand)]
     command: Command,
-    /// Output the first (count) lines
-    #[arg(short, long)]
-    count: Option<usize>,
-    /// Output the result in reverse order
-    #[arg(short, long, action)]
-    reverse: bool,
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Sort data by category
     Sort {
+        /// Sort data by Column name
         #[arg(value_name = "CATEGORY")]
         category: String,
+
+        /// Output the first (count) lines
+        #[arg(short, long)]
+        count: Option<usize>,
+
+        /// Output the result in reverse order
+        #[arg(short, long, action)]
+        reverse: bool,
+
+        /// Output filepath
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Filter data by a criterion
     Filter {
         #[arg(value_name = "CATEGORY")]
         category: String,
 
+        /// Comparison operator
         #[arg(value_name = "OPERATOR")]
         operator: Operator,
 
+        /// Compare against value
         #[arg(value_name = "VALUE")]
         argument: f32,
+
+        /// Output the first (count) lines
+        #[arg(short, long)]
+        count: Option<usize>,
+
+        /// Output the result in reverse order
+        #[arg(short, long, action)]
+        reverse: bool,
+
+        /// Output filepath
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Calculate The Mean
     Mean {
@@ -47,6 +68,10 @@ enum Command {
         /// Exclude a Column
         #[arg(short = 'x', long)]
         exclude: Option<Vec<String>>,
+
+        /// Output filepath
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -140,6 +165,30 @@ where
     None
 }
 
+fn dump_to_file(headers: &[String], data: &[Vec<f32>], filepath: PathBuf) -> io::Result<()> {
+    let file = File::options()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(filepath)?;
+    let mut file = BufWriter::new(file);
+    let headers = headers.join(",");
+    writeln!(file, "{}", headers)?;
+    let data = data
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|elem| elem.to_string())
+                .collect::<Vec<String>>()
+                .join(",")
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    file.write_all(data.as_bytes())?;
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     let args = Cli::parse();
 
@@ -175,7 +224,12 @@ fn main() -> Result<(), String> {
         .collect::<Vec<Vec<f32>>>();
 
     match args.command {
-        Command::Sort { category } => {
+        Command::Sort {
+            category,
+            count,
+            reverse,
+            output,
+        } => {
             if !headers.contains(&category) {
                 eprintln!("Invalid category");
                 std::process::exit(1);
@@ -183,21 +237,30 @@ fn main() -> Result<(), String> {
 
             let cat_index =
                 index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
-            if args.reverse {
+            if reverse {
                 cleaned_data.sort_by(|a, b| b[cat_index].total_cmp(&a[cat_index]));
             } else {
                 cleaned_data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
             }
-            if let Some(count) = args.count {
+            if let Some(count) = count {
                 cleaned_data.truncate(count);
             }
-            tabulate_data(&cleaned_data, &headers);
+
+            if let Some(file) = output {
+                dump_to_file(&headers, &cleaned_data, file)
+                    .map_err(|err| format!("Save to file failed: {}", err))?;
+            } else {
+                tabulate_data(&cleaned_data, &headers);
+            }
             std::process::exit(0);
         }
         Command::Filter {
             category,
             operator: instruction,
             argument,
+            count,
+            reverse,
+            output,
         } => {
             if !headers.contains(&category) {
                 eprintln!("Invalid category");
@@ -217,21 +280,29 @@ fn main() -> Result<(), String> {
                     Operator::Lte => row[cat_index] <= argument,
                 })
                 .collect::<Vec<Vec<f32>>>();
-            if args.reverse {
+            if reverse {
                 processed_data.reverse();
             }
-            if let Some(count) = args.count {
+            if let Some(count) = count {
                 processed_data.truncate(count);
             }
-            tabulate_data(&processed_data, &headers);
+            if let Some(file) = output {
+                dump_to_file(&headers, &processed_data, file)
+                    .map_err(|err| format!("Save to file failed: {}", err))?;
+            } else {
+                tabulate_data(&processed_data, &headers);
+            }
         }
 
         Command::Mean {
             categories,
             exclude,
+            output,
         } => {
+            let row_count = cleaned_data.len() as f32;
+            // Handle unspecified data columns
             if categories.is_none() || categories.as_ref().is_some_and(|list| list.is_empty()) {
-                let mut skips = Vec::new();
+                let mut skips = Vec::new(); // indices of cols to exclude
                 if let Some(exclude) = exclude {
                     for col in exclude {
                         if headers.contains(&col) {
@@ -242,7 +313,6 @@ fn main() -> Result<(), String> {
                     }
                 }
 
-                let row_count = cleaned_data.len();
                 let mut sums: Vec<f32> = vec![0.0; headers.len() - skips.len()];
                 for row in cleaned_data.into_iter() {
                     let mut i = 0;
@@ -255,22 +325,28 @@ fn main() -> Result<(), String> {
                 }
                 let means = sums
                     .into_iter()
-                    .map(|total| total / row_count as f32)
+                    .map(|total| total / row_count)
                     .collect::<Vec<f32>>();
                 let skips = skips
                     .into_iter()
                     .map(|i| &headers[i])
                     .cloned()
-                    .collect::<Vec<String>>();
+                    .collect::<Vec<String>>(); // actual header column names
                 let headers = headers
                     .into_iter()
                     .filter(|h| !skips.contains(h))
                     .collect::<Vec<String>>();
 
-                tabulate_data(&[means], &headers);
+                if let Some(file) = output {
+                    dump_to_file(&headers, &[means], file)
+                        .map_err(|err| format!("Save to file failed: {}", err))?;
+                } else {
+                    tabulate_data(&[means], &headers);
+                }
                 return Ok(());
             }
 
+            // Handle specified data columns
             let categories: Vec<String> = categories
                 .unwrap()
                 .iter()
@@ -281,16 +357,20 @@ fn main() -> Result<(), String> {
                 eprintln!("No valid categories passed");
                 std::process::exit(1);
             }
-            let mut means = Vec::with_capacity(categories.len());
 
-            for category in &categories {
-                let cat_index =
-                    index_of(&headers, category).ok_or_else(|| "category not found".to_string())?;
-                let values: Vec<f32> = cleaned_data.iter().map(|row| row[cat_index]).collect();
-                let mean = values.iter().sum::<f32>() / values.len() as f32;
-                means.push(mean);
+            let means: Vec<f32> = categories
+                .iter()
+                .map(|cat| index_of(&headers, cat).unwrap())
+                .map(|cat_index| cleaned_data.iter().map(|row| row[cat_index]).sum::<f32>())
+                .map(|total| total / row_count)
+                .collect();
+
+            if let Some(file) = output {
+                dump_to_file(&headers, &[means], file)
+                    .map_err(|err| format!("Save to file failed: {}", err))?;
+            } else {
+                tabulate_data(&[means], &headers);
             }
-            tabulate_data(&[means], &categories);
         }
     }
 
