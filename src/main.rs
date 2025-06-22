@@ -40,6 +40,14 @@ enum Command {
         #[arg(value_name = "VALUE")]
         argument: f32,
     },
+    /// Calculate The Mean
+    Mean {
+        #[arg(value_name = "CATEGORY")]
+        categories: Option<Vec<String>>,
+        /// Exclude a Column
+        #[arg(short = 'x', long)]
+        exclude: Option<Vec<String>>,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -67,8 +75,13 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
     // * 2     * 25       * 10        *
     //
 
-    if !data.is_empty() && headers.len() != data[0].len() {
-        eprintln!("Headers length rows not match data columns");
+    let header_cols = headers.len();
+    let data_cols = data[0].len();
+    if !data.is_empty() && header_cols != data_cols {
+        eprintln!(
+            "Header columns count does not match the data columns count: {} -> {}",
+            header_cols, data_cols
+        );
         std::process::exit(1);
     }
 
@@ -154,7 +167,7 @@ fn main() -> Result<(), String> {
                     .map(|elem| elem.trim())
                     .map(|elem| {
                         elem.parse::<f32>()
-                            .unwrap_or_else(|_| elem.parse::<u32>().unwrap_or_default() as f32)
+                            .unwrap_or_else(|_| elem.parse::<i32>().unwrap_or(-1) as f32)
                     })
                     .collect::<Vec<f32>>()
             })
@@ -204,13 +217,80 @@ fn main() -> Result<(), String> {
                     Operator::Lte => row[cat_index] <= argument,
                 })
                 .collect::<Vec<Vec<f32>>>();
-            if let Some(count) = args.count {
-                processed_data.truncate(count);
-            }
             if args.reverse {
                 processed_data.reverse();
             }
+            if let Some(count) = args.count {
+                processed_data.truncate(count);
+            }
             tabulate_data(&processed_data, &headers);
+        }
+
+        Command::Mean {
+            categories,
+            exclude,
+        } => {
+            if categories.is_none() || categories.as_ref().is_some_and(|list| list.is_empty()) {
+                let mut skips = Vec::new();
+                if let Some(exclude) = exclude {
+                    for col in exclude {
+                        if headers.contains(&col) {
+                            if let Some(idx) = index_of(&headers, &col) {
+                                skips.push(idx)
+                            }
+                        }
+                    }
+                }
+
+                let row_count = cleaned_data.len();
+                let mut sums: Vec<f32> = vec![0.0; headers.len() - skips.len()];
+                for row in cleaned_data.into_iter() {
+                    let mut i = 0;
+                    for (col, elem) in row.iter().enumerate() {
+                        if !skips.contains(&col) {
+                            sums[i] += elem;
+                            i += 1;
+                        }
+                    }
+                }
+                let means = sums
+                    .into_iter()
+                    .map(|total| total / row_count as f32)
+                    .collect::<Vec<f32>>();
+                let skips = skips
+                    .into_iter()
+                    .map(|i| &headers[i])
+                    .cloned()
+                    .collect::<Vec<String>>();
+                let headers = headers
+                    .into_iter()
+                    .filter(|h| !skips.contains(h))
+                    .collect::<Vec<String>>();
+
+                tabulate_data(&[means], &headers);
+                return Ok(());
+            }
+
+            let categories: Vec<String> = categories
+                .unwrap()
+                .iter()
+                .filter(|cat| headers.contains(cat))
+                .cloned()
+                .collect();
+            if categories.is_empty() {
+                eprintln!("No valid categories passed");
+                std::process::exit(1);
+            }
+            let mut means = Vec::with_capacity(categories.len());
+
+            for category in &categories {
+                let cat_index =
+                    index_of(&headers, category).ok_or_else(|| "category not found".to_string())?;
+                let values: Vec<f32> = cleaned_data.iter().map(|row| row[cat_index]).collect();
+                let mean = values.iter().sum::<f32>() / values.len() as f32;
+                means.push(mean);
+            }
+            tabulate_data(&[means], &categories);
         }
     }
 
