@@ -29,7 +29,7 @@ mud data.csv filter price gt 15.0;
 * 3    * 16.50    * 4          *
 *------------------------------*
 
-mud examples/data.csv -c 10 -r filter id lte 150;
+mud examples/data.csv filter id lte 150 -c 10 -r ;
 
 ========*========*========*========*=========
      id * value1 * value2 * value3 *  value4

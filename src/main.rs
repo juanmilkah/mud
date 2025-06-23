@@ -90,7 +90,7 @@ enum Command {
     },
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Debug, Clone, ValueEnum)]
 enum Operator {
     /// Greater than
     Gt,
@@ -107,21 +107,14 @@ enum Operator {
 }
 
 fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
-    // tabulate the data
-    // *------------------------------*
-    // * id    * price    * amount    *
-    // *-------*----------*-----------*
-    // * 1     * 10.50    * 5         *
-    // * 2     * 25       * 10        *
-    //
-
     if !data.is_empty() && headers.len() != data[0].len() {
         eprintln!(
             "Header columns count does not match the data columns count: {} -> {}",
             headers.len(),
             data[0].len()
         );
-        std::process::exit(1);
+
+        return;
     }
 
     let rows_as_string: Vec<Vec<String>> = data
@@ -136,7 +129,6 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
         }
     }
 
-    // headers separator
     let separator = cols_widths
         .iter()
         .map(|&w| "=".repeat(w + 2))
@@ -173,16 +165,8 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
     println!("{separator}");
 }
 
-fn index_of<T>(arr: &[T], elem: &T) -> Option<usize>
-where
-    T: Eq,
-{
-    for (i, item) in arr.iter().enumerate() {
-        if item == elem {
-            return Some(i);
-        }
-    }
-    None
+fn find_index<T: Eq>(arr: &[T], elem: &T) -> Option<usize> {
+    arr.iter().position(|item| item == elem)
 }
 
 fn dump_to_file(headers: &[String], data: &[Vec<f32>], filepath: PathBuf) -> io::Result<()> {
@@ -209,6 +193,169 @@ fn dump_to_file(headers: &[String], data: &[Vec<f32>], filepath: PathBuf) -> io:
     Ok(())
 }
 
+fn output_result(
+    data: &[Vec<f32>],
+    headers: &[String],
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    match output {
+        Some(file) => {
+            dump_to_file(headers, data, file).map_err(|err| format!("Save to file failed: {}", err))
+        }
+        None => {
+            tabulate_data(data, headers);
+            Ok(())
+        }
+    }
+}
+
+fn apply_count_and_reverse(data: &mut Vec<Vec<f32>>, count: Option<usize>, reverse: bool) {
+    if reverse {
+        data.reverse();
+    }
+    if let Some(count) = count {
+        data.truncate(count);
+    }
+}
+
+fn handle_sort(
+    mut data: Vec<Vec<f32>>,
+    headers: &[String],
+    category: &str,
+    count: Option<usize>,
+    reverse: bool,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let cat_index = find_index(headers, &category.to_lowercase())
+        .ok_or_else(|| "Invalid category".to_string())?;
+
+    if reverse {
+        data.sort_by(|a, b| b[cat_index].total_cmp(&a[cat_index]));
+    } else {
+        data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
+    }
+
+    if let Some(count) = count {
+        data.truncate(count);
+    }
+
+    output_result(&data, headers, output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_filter(
+    data: Vec<Vec<f32>>,
+    headers: &[String],
+    category: &str,
+    operator: &Operator,
+    argument: f32,
+    count: Option<usize>,
+    reverse: bool,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let cat_index = find_index(headers, &category.to_lowercase())
+        .ok_or_else(|| "Invalid category".to_string())?;
+
+    let mut filtered_data: Vec<Vec<f32>> = data
+        .into_iter()
+        .filter(|row| match operator {
+            Operator::Gt => row[cat_index] > argument,
+            Operator::Lt => row[cat_index] < argument,
+            Operator::Eq => (row[cat_index] - argument).abs() < f32::EPSILON,
+            Operator::Neq => (row[cat_index] - argument).abs() > f32::EPSILON,
+            Operator::Gte => row[cat_index] >= argument,
+            Operator::Lte => row[cat_index] <= argument,
+        })
+        .collect();
+
+    apply_count_and_reverse(&mut filtered_data, count, reverse);
+    output_result(&filtered_data, headers, output)
+}
+
+fn get_valid_categories(
+    categories: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+    headers: &[String],
+) -> Vec<String> {
+    let exclude = exclude.unwrap_or_default();
+
+    let valid_categories = match categories {
+        Some(cats) if !cats.is_empty() => cats,
+        _ => headers.to_vec(),
+    };
+
+    valid_categories
+        .into_iter()
+        .filter(|cat| headers.contains(cat))
+        .filter(|cat| !exclude.contains(cat))
+        .collect()
+}
+
+fn handle_mean(
+    data: &[Vec<f32>],
+    headers: &[String],
+    categories: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let valid_categories = get_valid_categories(categories, exclude, headers);
+
+    if valid_categories.is_empty() {
+        return Err("No valid categories passed".to_string());
+    }
+
+    let row_count = data.len() as f32;
+    let cat_indices: Vec<usize> = valid_categories
+        .iter()
+        .map(|cat| find_index(headers, cat).unwrap())
+        .collect();
+
+    let means: Vec<f32> = cat_indices
+        .iter()
+        .map(|&idx| data.iter().map(|row| row[idx]).sum::<f32>() / row_count)
+        .collect();
+
+    output_result(&[means], &valid_categories, output)
+}
+
+fn handle_median(
+    mut data: Vec<Vec<f32>>,
+    headers: &[String],
+    categories: Option<Vec<String>>,
+    exclude: Option<Vec<String>>,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let valid_categories = get_valid_categories(categories, exclude, headers);
+
+    if valid_categories.is_empty() {
+        return Err("No valid categories passed".to_string());
+    }
+
+    let cat_indices: Vec<usize> = valid_categories
+        .iter()
+        .map(|cat| find_index(headers, cat).unwrap())
+        .collect();
+
+    // Sort data by each column for median calculation
+    for &idx in &cat_indices {
+        data.sort_by(|a, b| a[idx].total_cmp(&b[idx]));
+    }
+
+    let row_count = data.len();
+    let medians: Vec<f32> = if row_count % 2 == 1 {
+        let mid = row_count / 2;
+        cat_indices.iter().map(|&idx| data[mid][idx]).collect()
+    } else {
+        let (lower, upper) = (row_count / 2 - 1, row_count / 2);
+        cat_indices
+            .iter()
+            .map(|&idx| (data[lower][idx] + data[upper][idx]) / 2.0)
+            .collect()
+    };
+
+    output_result(&[medians], &valid_categories, output)
+}
+
 fn main() -> Result<(), String> {
     let args = Cli::parse();
 
@@ -232,22 +379,24 @@ fn main() -> Result<(), String> {
         .map(|s| s.trim().to_lowercase())
         .collect::<Vec<String>>();
 
-    let mut cleaned_data = content
+    let data = content
         .lines()
         .skip(1)
-        .filter_map(|line| {
-            let matches = !line.is_empty();
-            matches.then(|| {
-                line.split(",")
-                    .map(|elem| elem.trim())
-                    .map(|elem| {
-                        elem.parse::<f32>()
-                            .unwrap_or_else(|_| elem.parse::<i32>().unwrap_or(-1) as f32)
-                    })
-                    .collect::<Vec<f32>>()
-            })
+        .filter(|&line| (!line.is_empty()))
+        .map(|line| {
+            line.split(",")
+                .map(|elem| elem.trim())
+                .map(|elem| {
+                    elem.parse::<f32>()
+                        .unwrap_or_else(|_| elem.parse::<i32>().unwrap_or(-1) as f32)
+                })
+                .collect::<Vec<f32>>()
         })
         .collect::<Vec<Vec<f32>>>();
+
+    if headers.len() != data.len() {
+        return Err("Mismatch between header count and data columns".to_string());
+    }
 
     match args.command {
         Command::Sort {
@@ -255,208 +404,161 @@ fn main() -> Result<(), String> {
             count,
             reverse,
             output,
-        } => {
-            if !headers.contains(&category) {
-                eprintln!("Invalid category");
-                std::process::exit(1);
-            }
-
-            let cat_index =
-                index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
-            if reverse {
-                cleaned_data.sort_by(|a, b| b[cat_index].total_cmp(&a[cat_index]));
-            } else {
-                cleaned_data.sort_by(|a, b| a[cat_index].total_cmp(&b[cat_index]));
-            }
-            if let Some(count) = count {
-                cleaned_data.truncate(count);
-            }
-
-            if let Some(file) = output {
-                dump_to_file(&headers, &cleaned_data, file)
-                    .map_err(|err| format!("Save to file failed: {}", err))?;
-            } else {
-                tabulate_data(&cleaned_data, &headers);
-            }
-            std::process::exit(0);
-        }
+        } => handle_sort(data, &headers, &category, count, reverse, output),
         Command::Filter {
             category,
-            operator: instruction,
+            operator,
             argument,
             count,
             reverse,
             output,
-        } => {
-            if !headers.contains(&category) {
-                eprintln!("Invalid category");
-                std::process::exit(1);
-            }
-
-            let cat_index =
-                index_of(&headers, &category).ok_or_else(|| "category not found".to_string())?;
-            let mut processed_data = cleaned_data
-                .into_iter()
-                .filter(|row| match instruction {
-                    Operator::Gt => row[cat_index] > argument,
-                    Operator::Lt => row[cat_index] < argument,
-                    Operator::Eq => (row[cat_index] - argument).abs() < f32::EPSILON,
-                    Operator::Neq => (row[cat_index] - argument).abs() > f32::EPSILON,
-                    Operator::Gte => row[cat_index] >= argument,
-                    Operator::Lte => row[cat_index] <= argument,
-                })
-                .collect::<Vec<Vec<f32>>>();
-            if reverse {
-                processed_data.reverse();
-            }
-            if let Some(count) = count {
-                processed_data.truncate(count);
-            }
-            if let Some(file) = output {
-                dump_to_file(&headers, &processed_data, file)
-                    .map_err(|err| format!("Save to file failed: {}", err))?;
-            } else {
-                tabulate_data(&processed_data, &headers);
-            }
-        }
+        } => handle_filter(
+            data, &headers, &category, &operator, argument, count, reverse, output,
+        ),
         Command::Mean {
             categories,
             exclude,
             output,
-        } => {
-            let row_count = cleaned_data.len() as f32;
-            // Handle unspecified data columns
-            if categories.is_none() || categories.as_ref().is_some_and(|list| list.is_empty()) {
-                let mut skips = Vec::new(); // indices of cols to exclude
-                if let Some(exclude) = exclude {
-                    for col in exclude {
-                        if headers.contains(&col) {
-                            if let Some(idx) = index_of(&headers, &col) {
-                                skips.push(idx)
-                            }
-                        }
-                    }
-                }
-
-                let mut sums: Vec<f32> = vec![0.0; headers.len() - skips.len()];
-                for row in cleaned_data.into_iter() {
-                    let mut i = 0;
-                    for (col, elem) in row.iter().enumerate() {
-                        if !skips.contains(&col) {
-                            sums[i] += elem;
-                            i += 1;
-                        }
-                    }
-                }
-                let means = sums
-                    .into_iter()
-                    .map(|total| total / row_count)
-                    .collect::<Vec<f32>>();
-                let skips = skips
-                    .into_iter()
-                    .map(|i| &headers[i])
-                    .cloned()
-                    .collect::<Vec<String>>(); // actual header column names
-                let headers = headers
-                    .into_iter()
-                    .filter(|h| !skips.contains(h))
-                    .collect::<Vec<String>>();
-
-                if let Some(file) = output {
-                    dump_to_file(&headers, &[means], file)
-                        .map_err(|err| format!("Save to file failed: {}", err))?;
-                } else {
-                    tabulate_data(&[means], &headers);
-                }
-                return Ok(());
-            }
-
-            // Handle specified data columns
-            let categories: Vec<String> = categories
-                .unwrap()
-                .iter()
-                .filter(|cat| headers.contains(cat))
-                .cloned()
-                .collect();
-            if categories.is_empty() {
-                eprintln!("No valid categories passed");
-                std::process::exit(1);
-            }
-
-            let means: Vec<f32> = categories
-                .iter()
-                .map(|cat| index_of(&headers, cat).unwrap())
-                .map(|cat_index| cleaned_data.iter().map(|row| row[cat_index]).sum::<f32>())
-                .map(|total| total / row_count)
-                .collect();
-
-            if let Some(file) = output {
-                dump_to_file(&headers, &[means], file)
-                    .map_err(|err| format!("Save to file failed: {}", err))?;
-            } else {
-                tabulate_data(&[means], &headers);
-            }
-        }
-
+        } => handle_mean(&data, &headers, categories, exclude, output),
         Command::Median {
             categories,
-            output,
             exclude,
-        } => {
-            let categories = match categories {
-                Some(cats) => Some(cats),
-                None => Some(headers.clone()),
-            };
-            let exclude = exclude.unwrap_or_default();
+            output,
+        } => handle_median(data, &headers, categories, exclude, output),
+    }
+}
 
-            let valid_categories = categories
-                .unwrap()
-                .into_iter()
-                .filter(|cat| headers.contains(cat))
-                .filter(|cat| !exclude.contains(cat))
-                .collect::<Vec<String>>();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
-            if valid_categories.is_empty() {
-                eprintln!("No valid categories passed");
-                std::process::exit(1);
-            }
-
-            let cat_indices = valid_categories
-                .iter()
-                .map(|cat| index_of(&headers, cat).unwrap())
-                .collect::<Vec<usize>>();
-
-            let row_count = cleaned_data.len();
-            let is_even = |size: usize| -> bool { size % 2 == 0 };
-
-            let medians = if !is_even(row_count) {
-                // 3 elems
-                // * * * => wanna work on 1
-                //   ^
-                let mid_point = (row_count - 1) / 2;
-                cat_indices
-                    .into_iter()
-                    .map(|col| cleaned_data[mid_point][col])
-                    .collect::<Vec<f32>>()
-            } else {
-                // 4 elems
-                // * * * * => wanna work on 1 && 2
-                //   ^ ^
-                let (lower, upper) = ((row_count / 2) - 1, (row_count / 2));
-                cat_indices
-                    .into_iter()
-                    .map(|col| (cleaned_data[lower][col] + cleaned_data[upper][col]) / 2.0)
-                    .collect::<Vec<f32>>()
-            };
-
-            if let Some(file) = output {
-                dump_to_file(&valid_categories, &[medians], file)
-                    .map_err(|err| format!("Save to file failed: {}", err))?;
-            } else {
-                tabulate_data(&[medians], &valid_categories);
-            }
-        }
+    fn large_dataset() -> (Vec<String>, Vec<Vec<f32>>) {
+        let headers = vec!["score".to_string(), "age".to_string()];
+        let data = (1..=100)
+            .map(|i| vec![i as f32 * 0.5, 20.0 + (i % 50) as f32])
+            .collect();
+        (headers, data)
     }
 
-    std::process::exit(0);
+    #[test]
+    fn test_dump_to_file() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.csv");
+
+        let headers = vec!["a".to_string(), "b".to_string()];
+        let data = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+
+        let result = dump_to_file(&headers, &data, file_path.clone());
+        assert!(result.is_ok());
+
+        let content = fs::read_to_string(file_path).unwrap();
+        assert!(content.contains("a,b"));
+        assert!(content.contains("1,2"));
+        assert!(content.contains("3,4"));
+    }
+
+    #[test]
+    fn test_large_dataset_performance() {
+        let (headers, data) = large_dataset();
+
+        // Test that operations complete on larger datasets
+        let start = std::time::Instant::now();
+        let result = handle_sort(data.clone(), &headers, "score", None, false, None);
+        let duration = start.elapsed();
+
+        assert!(result.is_ok());
+        assert!(duration.as_millis() < 1000); // Should complete within 1 second
+
+        let result = handle_mean(&data, &headers, None, None, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_edge_case_single_row() {
+        let headers = vec!["value".to_string()];
+        let data = vec![vec![42.0]];
+
+        assert!(handle_sort(data.clone(), &headers, "value", None, false, None).is_ok());
+        assert!(
+            handle_filter(
+                data.clone(),
+                &headers,
+                "value",
+                &Operator::Eq,
+                42.0,
+                None,
+                false,
+                None
+            )
+            .is_ok()
+        );
+        assert!(handle_mean(&data, &headers, None, None, None).is_ok());
+        assert!(handle_median(data, &headers, None, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_edge_case_negative_values() {
+        let headers = vec!["temp".to_string()];
+        let data = vec![vec![-10.5], vec![0.0], vec![-5.2], vec![15.3]];
+
+        assert!(handle_sort(data.clone(), &headers, "temp", None, false, None).is_ok());
+        assert!(
+            handle_filter(
+                data.clone(),
+                &headers,
+                "temp",
+                &Operator::Lt,
+                0.0,
+                None,
+                false,
+                None
+            )
+            .is_ok()
+        );
+        assert!(handle_mean(&data, &headers, None, None, None).is_ok());
+        assert!(handle_median(data, &headers, None, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_all_operators() {
+        let headers = vec!["value".to_string()];
+        let data = vec![vec![10.0], vec![20.0], vec![30.0]];
+
+        let operators = vec![
+            Operator::Gt,
+            Operator::Gte,
+            Operator::Lt,
+            Operator::Lte,
+            Operator::Eq,
+            Operator::Neq,
+        ];
+
+        for op in operators {
+            let result = {
+                let data = data.clone();
+                let headers: &[String] = &headers;
+                let operator: &Operator = &op;
+                let argument = 20.0;
+                let cat_index = find_index(headers, &"value".to_lowercase()).unwrap();
+
+                let mut filtered_data: Vec<Vec<f32>> = data
+                    .into_iter()
+                    .filter(|row| match operator {
+                        Operator::Gt => row[cat_index] > argument,
+                        Operator::Lt => row[cat_index] < argument,
+                        Operator::Eq => row[cat_index] == argument,
+                        Operator::Neq => row[cat_index] != argument,
+                        Operator::Gte => row[cat_index] >= argument,
+                        Operator::Lte => row[cat_index] <= argument,
+                    })
+                    .collect();
+
+                apply_count_and_reverse(&mut filtered_data, None, false);
+                output_result(&filtered_data, headers, None)
+            };
+            assert!(result.is_ok(), "Failed for operator: {:?}", op);
+        }
+    }
 }
