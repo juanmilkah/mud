@@ -64,8 +64,22 @@ enum Command {
     },
     /// Calculate The Mean
     Mean {
-        #[arg(value_name = "CATEGORY")]
+        #[arg(value_name = "CATEGORIES")]
         categories: Option<Vec<String>>,
+        /// Exclude a Column
+        #[arg(short = 'x', long)]
+        exclude: Option<Vec<String>>,
+
+        /// Output filepath
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    Median {
+        /// Compute the median of whole | categories of data
+        #[arg(value_name = "CATEGORIES")]
+        categories: Option<Vec<String>>,
+
         /// Exclude a Column
         #[arg(short = 'x', long)]
         exclude: Option<Vec<String>>,
@@ -305,7 +319,6 @@ fn main() -> Result<(), String> {
                 tabulate_data(&processed_data, &headers);
             }
         }
-
         Command::Mean {
             categories,
             exclude,
@@ -382,6 +395,65 @@ fn main() -> Result<(), String> {
                     .map_err(|err| format!("Save to file failed: {}", err))?;
             } else {
                 tabulate_data(&[means], &headers);
+            }
+        }
+
+        Command::Median {
+            categories,
+            output,
+            exclude,
+        } => {
+            let categories = match categories {
+                Some(cats) => Some(cats),
+                None => Some(headers.clone()),
+            };
+            let exclude = exclude.unwrap_or_default();
+
+            let valid_categories = categories
+                .unwrap()
+                .into_iter()
+                .filter(|cat| headers.contains(cat))
+                .filter(|cat| !exclude.contains(cat))
+                .collect::<Vec<String>>();
+
+            if valid_categories.is_empty() {
+                eprintln!("No valid categories passed");
+                std::process::exit(1);
+            }
+
+            let cat_indices = valid_categories
+                .iter()
+                .map(|cat| index_of(&headers, cat).unwrap())
+                .collect::<Vec<usize>>();
+
+            let row_count = cleaned_data.len();
+            let is_even = |size: usize| -> bool { size % 2 == 0 };
+
+            let medians = if !is_even(row_count) {
+                // 3 elems
+                // * * * => wanna work on 1
+                //   ^
+                let mid_point = (row_count - 1) / 2;
+                cat_indices
+                    .into_iter()
+                    .map(|col| cleaned_data[mid_point][col])
+                    .collect::<Vec<f32>>()
+            } else {
+                // 4 elems
+                // * * * * => wanna work on 1 && 2
+                //   ^ ^
+                let (lower, upper) = ((row_count / 2) - 1, (row_count / 2));
+                cat_indices
+                    .into_iter()
+                    .map(|col| (cleaned_data[lower][col] + cleaned_data[upper][col]) / 2.0)
+                    .collect::<Vec<f32>>()
+            };
+
+            if let Some(file) = output {
+                dump_to_file(&valid_categories, &[medians], file)
+                    .map_err(|err| format!("Save to file failed: {}", err))?;
+            } else {
+                tabulate_data(&[medians], &valid_categories);
             }
         }
     }
