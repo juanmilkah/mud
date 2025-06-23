@@ -1,3 +1,4 @@
+use core::f32;
 use std::{
     fs::File,
     io::{self, BufReader, BufWriter, Write, stdin},
@@ -83,6 +84,21 @@ enum Command {
         /// Exclude a Column
         #[arg(short = 'x', long)]
         exclude: Option<Vec<String>>,
+
+        /// Output filepath
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Represent the data as a line graph
+    Line {
+        /// The row on the X axis
+        #[arg(short, long)]
+        x: String,
+
+        /// The row on the Y axis
+        #[arg(short, long)]
+        y: String,
 
         /// Output filepath
         #[arg(short, long)]
@@ -356,6 +372,148 @@ fn handle_median(
     output_result(&[medians], &valid_categories, output)
 }
 
+fn handle_line_graph(
+    data: Vec<Vec<f32>>,
+    headers: Vec<String>,
+    x: String,
+    y: String,
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    // count,offset
+    // 0,5
+    // 1,4
+    // 2,3
+    // 3,2
+    // 4,1
+    // 5,0
+    //
+    // (x,y) = (count,offset)
+    //
+    // 5 *
+    // 4 *  *
+    // 3 *     *
+    // 2 *        *
+    // 1 *           *
+    // 0 *              *
+    //   *  *  *  *  *  *
+    //   0  1  2  3  4  5
+
+    if !headers.contains(&x) || !headers.contains(&y) {
+        return Err("Invalid x or y argument".to_string());
+    }
+
+    let (x, y) = (
+        find_index(&headers, &x.to_lowercase()).unwrap(),
+        find_index(&headers, &y.to_lowercase()).unwrap(),
+    );
+    let mut pairs: Vec<(f32, f32)> = data
+        .iter()
+        .map(|row| (row[x], row[y]))
+        .collect::<Vec<(f32, f32)>>();
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let (min_x, max_x) = pairs
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &(x, _)| {
+            (min.min(x), max.max(x))
+        });
+
+    let (min_y, max_y) = pairs
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &(_, y)| {
+            (min.min(y), max.max(y))
+        });
+
+    const GRAPH_HEIGHT: usize = 15;
+    const GRAPH_WIDTH: usize = 40;
+
+    let mut grid = vec![vec![' '; GRAPH_WIDTH]; GRAPH_HEIGHT];
+
+    for (x_val, y_val) in pairs.into_iter() {
+        let x_pos = if min_x == max_x {
+            GRAPH_WIDTH / 2
+        } else {
+            ((x_val - min_x) / (max_x - min_x) * (GRAPH_WIDTH - 1) as f32) as usize
+        };
+        let y_pos = if min_y == max_y {
+            GRAPH_HEIGHT / 2
+        } else {
+            ((max_y - y_val) / (max_y - min_y) * (GRAPH_HEIGHT - 1) as f32) as usize
+        };
+
+        if x_pos < GRAPH_WIDTH && y_pos < GRAPH_HEIGHT {
+            grid[y_pos][x_pos] = '*';
+        }
+    }
+
+    let mut graph = Vec::new();
+    graph.push(format!("y-axis ({}) x-axis ({})", headers[y], headers[x]));
+
+    for (i, row) in grid.into_iter().enumerate() {
+        let y_val = if max_y == min_y {
+            max_y
+        } else {
+            max_y - (i as f32 / (GRAPH_HEIGHT - 1) as f32) * (max_y - min_y)
+        };
+
+        let line = format!("{:>6.1} |{}", y_val, row.into_iter().collect::<String>());
+        graph.push(line);
+    }
+
+    let x_axis = format!("        {}", "-".repeat(GRAPH_WIDTH + 1));
+    graph.push(x_axis);
+
+    // let x_label_line = format!(
+    //     "       {:>6.1}{:>width$}{:>6.1}",
+    //     min_x,
+    //     "",
+    //     max_x,
+    //     width = GRAPH_WIDTH - 12,
+    // );
+
+    let num_labels = 5;
+    let mut x_label_line = String::from("       ");
+
+    for i in 0..num_labels {
+        let pos = (GRAPH_WIDTH - 1) * i / (num_labels - 1);
+        let x_val = if min_x == max_x {
+            min_x
+        } else {
+            min_x + (max_x - min_x) * (i as f32 / (num_labels - 1) as f32)
+        };
+
+        if i == 0 {
+            x_label_line.push_str(&format!("{:>6.1}", x_val));
+        } else {
+            let spaces_needed = pos - (x_label_line.len() - 7);
+            x_label_line.push_str(&" ".repeat(spaces_needed));
+            x_label_line.push_str(&format!("{:>6.1}", x_val));
+        }
+    }
+
+    graph.push(x_label_line);
+
+    match output {
+        Some(file) => {
+            let mut file = File::options()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(file)
+                .map_err(|err| format!("Failed to open output file: {}", err))?;
+            let graph = graph.join("\n");
+            file.write_all(graph.as_bytes())
+                .map_err(|err| format!("Failed to write results: {}", err))?;
+        }
+        None => {
+            for line in graph.iter() {
+                println!("{line}");
+            }
+        }
+    }
+
+    Ok(())
+}
 fn main() -> Result<(), String> {
     let args = Cli::parse();
 
@@ -394,7 +552,7 @@ fn main() -> Result<(), String> {
         })
         .collect::<Vec<Vec<f32>>>();
 
-    if headers.len() != data.len() {
+    if !data.is_empty() && headers.len() != data[0].len() {
         return Err("Mismatch between header count and data columns".to_string());
     }
 
@@ -425,6 +583,7 @@ fn main() -> Result<(), String> {
             exclude,
             output,
         } => handle_median(data, &headers, categories, exclude, output),
+        Command::Line { x, y, output } => handle_line_graph(data, headers, x, y, output),
     }
 }
 
