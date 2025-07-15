@@ -527,13 +527,9 @@ fn handle_to_json(
     headers: &[String],
     output: Option<PathBuf>,
 ) -> Result<(), String> {
-    let rows: Vec<HashMap<String, f32>> = data
+    let rows: Vec<HashMap<&str, f32>> = data
         .iter()
-        .map(|row| {
-            zip(headers, row)
-                .map(|(h, d)| (h.to_string(), *d))
-                .collect()
-        })
+        .map(|row| zip(headers, row).map(|(h, d)| (h.as_str(), *d)).collect())
         .collect();
     let json =
         serde_json::to_string_pretty(&rows).map_err(|err| format!("Serialize json: {err}"))?;
