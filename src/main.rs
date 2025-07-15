@@ -1,7 +1,8 @@
-use core::f32;
 use std::{
+    collections::HashMap,
     fs::File,
     io::{self, BufReader, BufWriter, Write, stdin},
+    iter::zip,
     path::PathBuf,
 };
 
@@ -104,6 +105,12 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Represent the data in Json format
+    Json {
+        /// Output filepath
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -135,7 +142,7 @@ fn tabulate_data(data: &[Vec<f32>], headers: &[String]) {
 
     let rows_as_string: Vec<Vec<String>> = data
         .iter()
-        .map(|row| row.iter().map(|elem| format!("{:.2}", elem)).collect())
+        .map(|row| row.iter().map(|elem| format!("{elem:.2}")).collect())
         .collect();
 
     let mut cols_widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
@@ -193,7 +200,7 @@ fn dump_to_file(headers: &[String], data: &[Vec<f32>], filepath: PathBuf) -> io:
         .open(filepath)?;
     let mut file = BufWriter::new(file);
     let headers = headers.join(",");
-    writeln!(file, "{}", headers)?;
+    writeln!(file, "{headers}")?;
     let data = data
         .iter()
         .map(|row| {
@@ -216,7 +223,7 @@ fn output_result(
 ) -> Result<(), String> {
     match output {
         Some(file) => {
-            dump_to_file(headers, data, file).map_err(|err| format!("Save to file failed: {}", err))
+            dump_to_file(headers, data, file).map_err(|err| format!("Save to file failed: {err}"))
         }
         None => {
             tabulate_data(data, headers);
@@ -335,7 +342,7 @@ fn handle_mean(
 }
 
 fn handle_median(
-    mut data: Vec<Vec<f32>>,
+    data: &mut [Vec<f32>],
     headers: &[String],
     categories: Option<Vec<String>>,
     exclude: Option<Vec<String>>,
@@ -483,11 +490,11 @@ fn handle_line_graph(
         };
 
         if i == 0 {
-            x_label_line.push_str(&format!("{:>6.1}", x_val));
+            x_label_line.push_str(&format!("{x_val:>6.1}"));
         } else {
             let spaces_needed = pos - (x_label_line.len() - 7);
             x_label_line.push_str(&" ".repeat(spaces_needed));
-            x_label_line.push_str(&format!("{:>6.1}", x_val));
+            x_label_line.push_str(&format!("{x_val:>6.1}"));
         }
     }
 
@@ -500,10 +507,10 @@ fn handle_line_graph(
                 .create(true)
                 .truncate(true)
                 .open(file)
-                .map_err(|err| format!("Failed to open output file: {}", err))?;
+                .map_err(|err| format!("Failed to open output file: {err}"))?;
             let graph = graph.join("\n");
             file.write_all(graph.as_bytes())
-                .map_err(|err| format!("Failed to write results: {}", err))?;
+                .map_err(|err| format!("Failed to write results: {err}"))?;
         }
         None => {
             for line in graph.iter() {
@@ -514,18 +521,47 @@ fn handle_line_graph(
 
     Ok(())
 }
+
+fn handle_to_json(
+    data: &[Vec<f32>],
+    headers: &[String],
+    output: Option<PathBuf>,
+) -> Result<(), String> {
+    let rows: Vec<HashMap<String, f32>> = data
+        .iter()
+        .map(|row| {
+            zip(headers, row)
+                .map(|(h, d)| (h.to_string(), *d))
+                .collect()
+        })
+        .collect();
+    let json =
+        serde_json::to_string_pretty(&rows).map_err(|err| format!("Serialize json: {err}"))?;
+
+    match output {
+        Some(file) => {
+            let mut file =
+                File::create(&file).map_err(|err| format!("Open file {file:?}: {err}"))?;
+            file.write_all(json.as_bytes())
+                .map_err(|err| format!("Write json to file: {err}"))?;
+        }
+        None => println!("{json}"),
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), String> {
     let args = Cli::parse();
 
     let content = match args.filepath {
         Some(filepath) => {
-            let file = File::open(filepath).map_err(|err| format!("File is missing: {}", err))?;
+            let file = File::open(filepath).map_err(|err| format!("File is missing: {err}"))?;
             let file = BufReader::new(file);
-            io::read_to_string(file).map_err(|err| format!("Read from file failed: {}", err))?
+            io::read_to_string(file).map_err(|err| format!("Read from file failed: {err}"))?
         }
         None => {
             let stdin = stdin();
-            io::read_to_string(stdin).map_err(|err| format!("Read from stdin failed: {}", err))?
+            io::read_to_string(stdin).map_err(|err| format!("Read from stdin failed: {err}"))?
         }
     };
 
@@ -537,7 +573,7 @@ fn main() -> Result<(), String> {
         .map(|s| s.trim().to_lowercase())
         .collect::<Vec<String>>();
 
-    let data = content
+    let mut data = content
         .lines()
         .skip(1)
         .filter(|&line| (!line.is_empty()))
@@ -582,8 +618,9 @@ fn main() -> Result<(), String> {
             categories,
             exclude,
             output,
-        } => handle_median(data, &headers, categories, exclude, output),
+        } => handle_median(&mut data, &headers, categories, exclude, output),
         Command::Line { x, y, output } => handle_line_graph(data, headers, x, y, output),
+        Command::Json { output } => handle_to_json(&data, &headers, output),
     }
 }
 
@@ -637,7 +674,7 @@ mod tests {
     #[test]
     fn test_edge_case_single_row() {
         let headers = vec!["value".to_string()];
-        let data = vec![vec![42.0]];
+        let mut data = vec![vec![42.0]];
 
         assert!(handle_sort(data.clone(), &headers, "value", None, false, None).is_ok());
         assert!(
@@ -654,13 +691,13 @@ mod tests {
             .is_ok()
         );
         assert!(handle_mean(&data, &headers, None, None, None).is_ok());
-        assert!(handle_median(data, &headers, None, None, None).is_ok());
+        assert!(handle_median(&mut data, &headers, None, None, None).is_ok());
     }
 
     #[test]
     fn test_edge_case_negative_values() {
         let headers = vec!["temp".to_string()];
-        let data = vec![vec![-10.5], vec![0.0], vec![-5.2], vec![15.3]];
+        let mut data = vec![vec![-10.5], vec![0.0], vec![-5.2], vec![15.3]];
 
         assert!(handle_sort(data.clone(), &headers, "temp", None, false, None).is_ok());
         assert!(
@@ -677,7 +714,7 @@ mod tests {
             .is_ok()
         );
         assert!(handle_mean(&data, &headers, None, None, None).is_ok());
-        assert!(handle_median(data, &headers, None, None, None).is_ok());
+        assert!(handle_median(&mut data, &headers, None, None, None).is_ok());
     }
 
     #[test]
@@ -717,7 +754,7 @@ mod tests {
                 apply_count_and_reverse(&mut filtered_data, None, false);
                 output_result(&filtered_data, headers, None)
             };
-            assert!(result.is_ok(), "Failed for operator: {:?}", op);
+            assert!(result.is_ok(), "Failed for operator: {op:?}");
         }
     }
 }
