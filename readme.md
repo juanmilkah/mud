@@ -64,7 +64,27 @@ mud examples/data.csv mean -x id -x value2;
   42.26 * 737.50 *  80.71 * 5987.50
 ========*========*========*=========
 
-```
 
+mud json -o examples/a.json < examples/a.csv;
+
+[
+  {
+    "offset": 10.0,
+    "count": 1.0
+  },
+  {
+    "count": 2.0,
+    "offset": 9.0
+  },
+  {
+    "offset": 8.0,
+    "count": 3.0
+  },
+  {
+    "count": 4.0,
+    "offset": 7.0
+  }
+]
+```
 
 The project is licensed under the [MIT](LICENSE) License.
